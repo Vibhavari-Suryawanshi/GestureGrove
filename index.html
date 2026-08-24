@@ -1,1 +1,50 @@
+<!doctype html>
+<html lang="en" data-mode="dark">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gesture Grove — grow a tree with your hands</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="A hand-gesture controlled generative tree. Grow it with your right hand, bloom it with your left." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
 
+  <!-- Raw camera feed. Never shown to the user directly -->
+  <!-- it only feeds the hand tracker and the small monitor view. -->
+  <video id="webcam" autoplay playsinline muted></video>
+
+  <!-- Full-screen canvas where the tree is drawn -->
+  <canvas id="scene"></canvas>
+
+  <!-- Landing / permission screen -->
+  <div id="startScreen">
+    <h1>Gesture Grove</h1>
+    <p>Grow a tree and bloom its flowers using nothing but your hands, in front of your webcam.</p>
+    <ul class="legend">
+      <li><span class="dot growth"></span> Right hand — pinch and hold to grow the tree</li>
+      <li><span class="dot bloom"></span> Left hand — pinch to bloom the flowers</li>
+    </ul>
+    <button id="startBtn">Enable camera</button>
+    <p class="hint">All hand tracking runs locally in your browser. Your video is never uploaded anywhere.</p>
+  </div>
+
+  <!-- Live readout of growth / bloom state -->
+  <div id="hud" class="hidden">
+    <div class="hud-row">
+      <span class="hud-label growth">GROWTH</span>
+      <div class="hud-bar"><div id="growthFill" class="hud-fill growth"></div></div>
+    </div>
+    <div class="hud-row">
+      <span class="hud-label bloom">BLOOM</span>
+      <div class="hud-bar"><div id="bloomFill" class="hud-fill bloom"></div></div>
+    </div>
+  </div>
+
+  <!-- Small mirrored monitor showing what the tracker sees -->
+  <canvas id="monitor" class="hidden"></canvas>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
