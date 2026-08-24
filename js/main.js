@@ -2,21 +2,18 @@ import { startWebcam } from "./webcam.js";
 import { createHandTracker, detectHands } from "./handTracker.js";
 import { pinchStrength, createSmoother } from "./gestures.js";
 import { createGrowthState, updateState } from "./state.js";
-import { generateTree, drawTree } from "./tree.js";
-import { drawMonitor } from "./monitor.js";
+import { generateTree, drawTree, drawBloomCluster } from "./tree.js";
+import { drawSkeleton, drawGauge, landmarkToScreen } from "./handOverlay.js";
 
 const video = document.getElementById("webcam");
 const sceneCanvas = document.getElementById("scene");
 const sceneCtx = sceneCanvas.getContext("2d");
-const monitorCanvas = document.getElementById("monitor");
-const monitorCtx = monitorCanvas.getContext("2d");
 const startScreen = document.getElementById("startScreen");
 const startBtn = document.getElementById("startBtn");
-const hud = document.getElementById("hud");
-const growthFill = document.getElementById("growthFill");
-const bloomFill = document.getElementById("bloomFill");
 
-const COLORS = { growth: "#8fbf6b", bloom: "#e8879e", scan: "#8fbf6b" };
+const GROWTH_COLOR = "#4d94ff";
+const BLOOM_COLOR = "#ff6b6b";
+const WRIST = 0;
 
 function resizeScene() {
   sceneCanvas.width = window.innerWidth;
@@ -25,13 +22,15 @@ function resizeScene() {
 window.addEventListener("resize", resizeScene);
 resizeScene();
 
-monitorCanvas.width = 200;
-monitorCanvas.height = 150;
-
 const tree = generateTree(7);
 const state = createGrowthState();
 const smoothRight = createSmoother();
 const smoothLeft = createSmoother();
+
+// Remembers the last known wrist position so the tree doesn't jump to a
+// default spot the instant tracking briefly drops a hand.
+let lastRightWrist = null;
+let lastLeftWrist = null;
 
 let handLandmarker = null;
 let lastTime = performance.now();
@@ -45,8 +44,6 @@ startBtn.addEventListener("click", async () => {
     handLandmarker = await createHandTracker();
 
     startScreen.classList.add("hidden");
-    hud.classList.remove("hidden");
-    monitorCanvas.classList.remove("hidden");
 
     lastTime = performance.now();
     requestAnimationFrame(loop);
@@ -60,6 +57,20 @@ startBtn.addEventListener("click", async () => {
   }
 });
 
+// Draws the live camera feed mirrored and stretched to fill the canvas.
+// Stretching (rather than a true "cover" crop) keeps the math simple and
+// lines landmark coordinates up 1:1 with on-screen pixels.
+function drawVideoBackground() {
+  sceneCtx.save();
+  sceneCtx.scale(-1, 1);
+  sceneCtx.drawImage(video, -sceneCanvas.width, 0, sceneCanvas.width, sceneCanvas.height);
+  sceneCtx.restore();
+
+  // Slight dark overlay so the glowing tree/flowers pop against the feed.
+  sceneCtx.fillStyle = "rgba(0, 0, 0, 0.25)";
+  sceneCtx.fillRect(0, 0, sceneCanvas.width, sceneCanvas.height);
+}
+
 function loop(now) {
   requestAnimationFrame(loop);
 
@@ -72,18 +83,33 @@ function loop(now) {
   const leftPinch = smoothLeft(pinchStrength(hands.Left));
   updateState(state, rightPinch, leftPinch, dt);
 
-  sceneCtx.clearRect(0, 0, sceneCanvas.width, sceneCanvas.height);
-  drawTree(
-    sceneCtx,
-    tree,
-    state.growth,
-    state.bloom,
-    sceneCanvas.width / 2,
-    sceneCanvas.height - 40
-  );
+  drawVideoBackground();
 
-  growthFill.style.width = `${state.growth * 100}%`;
-  bloomFill.style.width = `${state.bloom * 100}%`;
+  const w = sceneCanvas.width;
+  const h = sceneCanvas.height;
 
-  drawMonitor(monitorCtx, video, hands, monitorCanvas.width, monitorCanvas.height, COLORS);
+  if (hands.Right) {
+    lastRightWrist = landmarkToScreen(hands.Right[WRIST], w, h);
+    drawSkeleton(sceneCtx, hands.Right, w, h, GROWTH_COLOR);
+  }
+  if (hands.Left) {
+    lastLeftWrist = landmarkToScreen(hands.Left[WRIST], w, h);
+    drawSkeleton(sceneCtx, hands.Left, w, h, BLOOM_COLOR);
+  }
+
+  // The tree grows rooted at the right wrist; falls back to bottom-center
+  // until a right hand has been seen at least once.
+  const treeOrigin = lastRightWrist || { x: w / 2, y: h - 60 };
+  drawTree(sceneCtx, tree, state.growth, treeOrigin.x, treeOrigin.y);
+
+  if (lastLeftWrist) {
+    drawBloomCluster(sceneCtx, lastLeftWrist.x, lastLeftWrist.y - 40, state.bloom);
+  }
+
+  if (lastRightWrist) {
+    drawGauge(sceneCtx, lastRightWrist.x, lastRightWrist.y, state.growth, "Grow", GROWTH_COLOR);
+  }
+  if (lastLeftWrist) {
+    drawGauge(sceneCtx, lastLeftWrist.x, lastLeftWrist.y, state.bloom, "Bloom", BLOOM_COLOR);
+  }
 }
