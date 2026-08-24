@@ -10,11 +10,12 @@ function mulberry32(seed) {
   };
 }
 
-const MAX_DEPTH = 7;
+const MAX_DEPTH = 6;
 
-// Builds the tree's structure once, up front. Each node only stores its
+// Builds the branch structure once, up front. Each node only stores its
 // angle relative to its parent and its full-grown length — actual screen
-// position is computed at draw time via canvas transforms.
+// position is computed at draw time via canvas transforms, anchored to
+// wherever the hand currently is.
 export function generateTree(seed = 1) {
   const rng = mulberry32(seed);
 
@@ -22,14 +23,14 @@ export function generateTree(seed = 1) {
     const node = { depth, length, children: [] };
 
     if (depth < MAX_DEPTH - 1) {
-      const count = depth === 0 ? 2 : rng() < 0.8 ? 2 : 3;
-      const baseSpread = 22 + rng() * 14; // degrees between siblings
+      const count = depth === 0 ? 3 : rng() < 0.7 ? 2 : 3;
+      const baseSpread = 20 + rng() * 16; // degrees between siblings
 
       for (let i = 0; i < count; i++) {
-        const angleOffset = (i - (count - 1) / 2) * baseSpread + (rng() - 0.5) * 10;
+        const angleOffset = (i - (count - 1) / 2) * baseSpread + (rng() - 0.5) * 12;
         node.children.push({
           angleOffset,
-          node: build(depth + 1, length * (0.68 + rng() * 0.1)),
+          node: build(depth + 1, length * (0.7 + rng() * 0.1)),
         });
       }
     }
@@ -37,7 +38,7 @@ export function generateTree(seed = 1) {
     return node;
   }
 
-  return build(0, 130);
+  return build(0, 90);
 }
 
 // How "unlocked" a given depth level is, given the current growth value.
@@ -46,75 +47,93 @@ function levelProgress(depth, growth) {
   return Math.min(1, Math.max(0, growth * MAX_DEPTH - depth));
 }
 
-function lerpColor(a, b, t) {
-  const r = Math.round(a[0] + (b[0] - a[0]) * t);
-  const g = Math.round(a[1] + (b[1] - a[1]) * t);
-  const bl = Math.round(a[2] + (b[2] - a[2]) * t);
-  return `rgb(${r}, ${g}, ${bl})`;
-}
-
-function drawFlower(ctx, size, colors) {
-  if (size <= 0.5) return;
-  const petals = 5;
+// A tulip-like cluster of pointed, glowing petals — matches the reference
+// look more closely than a rounded flower.
+function drawTulip(ctx, size, opacity) {
+  if (size <= 0.5 || opacity <= 0.02) return;
+  const petalAngles = [-0.5, -0.22, 0, 0.22, 0.5];
 
   ctx.save();
-  for (let i = 0; i < petals; i++) {
-    ctx.rotate((Math.PI * 2) / petals);
+  ctx.globalAlpha = opacity;
+  ctx.shadowColor = "rgba(255, 90, 70, 0.9)";
+  ctx.shadowBlur = size * 1.4;
+
+  for (const a of petalAngles) {
+    ctx.save();
+    ctx.rotate(a);
     ctx.beginPath();
-    ctx.ellipse(0, -size * 0.55, size * 0.32, size * 0.55, 0, 0, Math.PI * 2);
-    ctx.fillStyle = colors.petal;
+    ctx.moveTo(0, 0);
+    ctx.quadraticCurveTo(size * 0.22, -size * 0.65, 0, -size * 1.2);
+    ctx.quadraticCurveTo(-size * 0.22, -size * 0.65, 0, 0);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(0, 0, 0, -size * 1.2);
+    grad.addColorStop(0, "#ff3b2f");
+    grad.addColorStop(1, "#ffb199");
+    ctx.fillStyle = grad;
     ctx.fill();
+    ctx.restore();
   }
-  ctx.beginPath();
-  ctx.arc(0, 0, size * 0.3, 0, Math.PI * 2);
-  ctx.fillStyle = colors.center;
-  ctx.fill();
+
   ctx.restore();
 }
 
-function drawNode(ctx, node, growth, bloom, palette) {
+function drawBranchNode(ctx, node, growth, glowColor) {
   const progress = levelProgress(node.depth, growth);
   if (progress <= 0) return;
 
   const len = node.length * Math.min(1, progress);
-  const t = node.depth / MAX_DEPTH;
 
-  ctx.strokeStyle = lerpColor(palette.trunk, palette.tip, t);
-  ctx.lineWidth = Math.max(1.5, 10 * (1 - t));
+  ctx.save();
+  ctx.shadowColor = glowColor;
+  ctx.shadowBlur = 6;
+  ctx.strokeStyle = glowColor;
+  ctx.lineWidth = Math.max(1, 2.5 - node.depth * 0.3);
   ctx.lineCap = "round";
   ctx.beginPath();
   ctx.moveTo(0, 0);
   ctx.lineTo(0, -len);
   ctx.stroke();
+  ctx.restore();
 
   ctx.translate(0, -len);
 
   const isFullyGrown = progress >= 1;
-  const isTip = node.children.length === 0;
-
-  if (isFullyGrown && isTip) {
-    drawFlower(ctx, 6 + bloom * 16, palette.flower);
-  }
-
   if (isFullyGrown) {
     for (const child of node.children) {
       ctx.save();
       ctx.rotate((child.angleOffset * Math.PI) / 180);
-      drawNode(ctx, child.node, growth, bloom, palette);
+      drawBranchNode(ctx, child.node, growth, glowColor);
       ctx.restore();
     }
   }
 }
 
-const PALETTE = {
-  trunk: [74, 55, 40], // warm brown at the base
-  tip: [143, 191, 107], // fresh green at growing tips
-  flower: { petal: "#e8879e", center: "#e8a23c" },
-};
-
-export function drawTree(ctx, tree, growth, bloom, originX, originY) {
+// Draws the growing branch structure, rooted at (originX, originY) and
+// growing generally upward. Doesn't draw flowers — those are drawn
+// separately at the bloom hand's position, see drawBloomCluster below.
+export function drawTree(ctx, tree, growth, originX, originY) {
   ctx.save();
   ctx.translate(originX, originY);
-  drawNode(ctx, tree, growth, bloom, PALETTE);
+  drawBranchNode(ctx, tree, growth, "#4d94ff");
   ctx.restore();
+}
+
+// Draws a small cluster of tulip flowers centered on the bloom hand's
+// position, sized and faded in according to the bloom value.
+export function drawBloomCluster(ctx, x, y, bloom) {
+  if (bloom <= 0.02) return;
+
+  const flowerOffsets = [
+    { dx: 0, dy: 0, scale: 1 },
+    { dx: -26, dy: 10, scale: 0.75 },
+    { dx: 24, dy: 14, scale: 0.7 },
+    { dx: -10, dy: 34, scale: 0.6 },
+  ];
+
+  for (const f of flowerOffsets) {
+    ctx.save();
+    ctx.translate(x + f.dx, y + f.dy);
+    drawTulip(ctx, (18 + bloom * 22) * f.scale, Math.min(1, bloom * 1.3));
+    ctx.restore();
+  }
 }
