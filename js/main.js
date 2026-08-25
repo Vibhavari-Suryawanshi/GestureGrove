@@ -102,9 +102,11 @@ function loop(now) {
   const w = sceneCanvas.width;
   const h = sceneCanvas.height;
 
-  // Plant is rooted bottom-center and sized relative to the viewport so it
-  // fills the screen the same way on any device.
-  const baseLength = Math.min(w, h) * 0.72;
+  // Plant is rooted bottom-center. Sized off the larger of width/height
+  // (not just height) so on wide landscape frames the branches have enough
+  // reach to fan all the way out toward the left/right edges instead of
+  // staying bunched in a bubble above the trunk.
+  const baseLength = Math.max(w, h) * 0.62;
   const originX = w * 0.5;
   const originY = h * 0.98;
 
