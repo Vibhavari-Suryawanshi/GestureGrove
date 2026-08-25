@@ -1,9 +1,9 @@
 import { startWebcam } from "./webcam.js";
 import { createHandTracker, detectHands } from "./handTracker.js";
-import { pinchStrength, createSmoother } from "./gestures.js";
+import { spreadValue, createSmoother } from "./gestures.js";
 import { createGrowthState, updateState } from "./state.js";
-import { generateTree, drawTree, drawBloomCluster } from "./tree.js";
-import { drawSkeleton, drawGauge, landmarkToScreen } from "./handOverlay.js";
+import { generateTree, drawPlant } from "./tree.js";
+import { pinchGapPosition, drawGauge } from "./handOverlay.js";
 
 const video = document.getElementById("webcam");
 const sceneCanvas = document.getElementById("scene");
@@ -11,9 +11,8 @@ const sceneCtx = sceneCanvas.getContext("2d");
 const startScreen = document.getElementById("startScreen");
 const startBtn = document.getElementById("startBtn");
 
-const GROWTH_COLOR = "#4d94ff";
-const BLOOM_COLOR = "#ff6b6b";
-const WRIST = 0;
+const GROWTH_COLOR = "#4d94ff"; // left hand
+const BLOOM_COLOR = "#ff6b6b"; // right hand
 
 function resizeScene() {
   sceneCanvas.width = window.innerWidth;
@@ -24,13 +23,8 @@ resizeScene();
 
 const tree = generateTree(7);
 const state = createGrowthState();
-const smoothRight = createSmoother();
 const smoothLeft = createSmoother();
-
-// Remembers the last known wrist position so the tree doesn't jump to a
-// default spot the instant tracking briefly drops a hand.
-let lastRightWrist = null;
-let lastLeftWrist = null;
+const smoothRight = createSmoother();
 
 let handLandmarker = null;
 let lastTime = performance.now();
@@ -66,50 +60,37 @@ function drawVideoBackground() {
   sceneCtx.drawImage(video, -sceneCanvas.width, 0, sceneCanvas.width, sceneCanvas.height);
   sceneCtx.restore();
 
-  // Slight dark overlay so the glowing tree/flowers pop against the feed.
+  // Slight dark overlay so the glowing plant pops against the feed.
   sceneCtx.fillStyle = "rgba(0, 0, 0, 0.25)";
   sceneCtx.fillRect(0, 0, sceneCanvas.width, sceneCanvas.height);
 }
 
 function loop(now) {
   requestAnimationFrame(loop);
-
-  const dt = Math.min(0.1, (now - lastTime) / 1000);
   lastTime = now;
 
   const hands = detectHands(handLandmarker, video, now);
 
-  const rightPinch = smoothRight(pinchStrength(hands.Right));
-  const leftPinch = smoothLeft(pinchStrength(hands.Left));
-  updateState(state, rightPinch, leftPinch, dt);
+  // Left hand's finger spread -> growth. Right hand's finger spread -> bloom.
+  // Both are read directly each frame (reversible), not accumulated.
+  const leftSpread = hands.Left ? smoothLeft(spreadValue(hands.Left)) : null;
+  const rightSpread = hands.Right ? smoothRight(spreadValue(hands.Right)) : null;
+  updateState(state, leftSpread, rightSpread);
 
   drawVideoBackground();
 
   const w = sceneCanvas.width;
   const h = sceneCanvas.height;
 
-  if (hands.Right) {
-    lastRightWrist = landmarkToScreen(hands.Right[WRIST], w, h);
-    drawSkeleton(sceneCtx, hands.Right, w, h, GROWTH_COLOR);
-  }
+  // The plant is one connected piece, always rooted at the same spot.
+  drawPlant(sceneCtx, tree, state.growth, state.bloom, w * 0.22, h * 0.96);
+
   if (hands.Left) {
-    lastLeftWrist = landmarkToScreen(hands.Left[WRIST], w, h);
-    drawSkeleton(sceneCtx, hands.Left, w, h, BLOOM_COLOR);
+    const pos = pinchGapPosition(hands.Left, w, h);
+    drawGauge(sceneCtx, pos.x, pos.y, state.growth, "Grow", GROWTH_COLOR);
   }
-
-  // The tree grows rooted at the right wrist; falls back to bottom-center
-  // until a right hand has been seen at least once.
-  const treeOrigin = lastRightWrist || { x: w / 2, y: h - 60 };
-  drawTree(sceneCtx, tree, state.growth, treeOrigin.x, treeOrigin.y);
-
-  if (lastLeftWrist) {
-    drawBloomCluster(sceneCtx, lastLeftWrist.x, lastLeftWrist.y - 40, state.bloom);
-  }
-
-  if (lastRightWrist) {
-    drawGauge(sceneCtx, lastRightWrist.x, lastRightWrist.y, state.growth, "Grow", GROWTH_COLOR);
-  }
-  if (lastLeftWrist) {
-    drawGauge(sceneCtx, lastLeftWrist.x, lastLeftWrist.y, state.bloom, "Bloom", BLOOM_COLOR);
+  if (hands.Right) {
+    const pos = pinchGapPosition(hands.Right, w, h);
+    drawGauge(sceneCtx, pos.x, pos.y, state.bloom, "Bloom", BLOOM_COLOR);
   }
 }
