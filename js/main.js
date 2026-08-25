@@ -2,7 +2,7 @@ import { startWebcam } from "./webcam.js";
 import { createHandTracker, detectHands } from "./handTracker.js";
 import { spreadValue, createSmoother } from "./gestures.js";
 import { createGrowthState, updateState } from "./state.js";
-import { generateStems, drawPlant } from "./tree.js";
+import { generateTree, drawPlant } from "./tree.js";
 import { pinchGapPosition, drawGauge } from "./handOverlay.js";
 
 const video = document.getElementById("webcam");
@@ -21,7 +21,7 @@ function resizeScene() {
 window.addEventListener("resize", resizeScene);
 resizeScene();
 
-const stems = generateStems(7);
+const tree = generateTree(7);
 const state = createGrowthState();
 const smoothLeft = createSmoother();
 const smoothRight = createSmoother();
@@ -85,7 +85,7 @@ function loop(now) {
   // Plant is rooted bottom-center and sized relative to the viewport so it
   // fills the screen the same way on any device.
   const baseLength = Math.min(w, h) * 0.62;
-  drawPlant(sceneCtx, stems, state.growth, state.bloom, w * 0.5, h * 0.98, baseLength);
+  drawPlant(sceneCtx, tree, state.growth, state.bloom, w * 0.5, h * 0.98, baseLength);
 
   if (hands.Left) {
     const pos = pinchGapPosition(hands.Left, w, h);
