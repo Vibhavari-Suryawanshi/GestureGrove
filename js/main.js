@@ -4,6 +4,7 @@ import { spreadValue, createSmoother } from "./gestures.js";
 import { createGrowthState, updateState } from "./state.js";
 import { generateTree, drawPlant } from "./tree.js";
 import { pinchGapPosition, drawGauge } from "./handOverlay.js";
+import { createParticles, drawAmbientGlow } from "./particles.js";
 
 const video = document.getElementById("webcam");
 const sceneCanvas = document.getElementById("scene");
@@ -13,6 +14,10 @@ const startBtn = document.getElementById("startBtn");
 
 const GROWTH_COLOR = "#4d94ff"; // left hand
 const BLOOM_COLOR = "#ff6b6b"; // right hand
+
+// Warm pollen/spark colors for the ambient particle drift — independent of
+// the per-flower palette in tree.js, kept soft and consistent instead.
+const PARTICLE_PALETTE = ["#ffd23f", "#ff9f1c", "#8ac926", "#f15bb5", "#4d94ff"];
 
 function resizeScene() {
   sceneCanvas.width = window.innerWidth;
@@ -29,6 +34,7 @@ let wasIdle = true;
 const state = createGrowthState();
 const smoothLeft = createSmoother();
 const smoothRight = createSmoother();
+const particles = createParticles();
 
 let handLandmarker = null;
 let lastTime = performance.now();
@@ -71,6 +77,7 @@ function drawVideoBackground() {
 
 function loop(now) {
   requestAnimationFrame(loop);
+  const dt = now - lastTime;
   lastTime = now;
 
   const hands = detectHands(handLandmarker, video, now);
@@ -98,7 +105,26 @@ function loop(now) {
   // Plant is rooted bottom-center and sized relative to the viewport so it
   // fills the screen the same way on any device.
   const baseLength = Math.min(w, h) * 0.72;
-  drawPlant(sceneCtx, tree, state.growth, state.bloom, w * 0.5, h * 0.98, baseLength);
+  const originX = w * 0.5;
+  const originY = h * 0.98;
+
+  // Soft breathing glow behind the canopy, and drifting pollen once the
+  // flowers are open — both purely time-driven, so they keep the scene
+  // feeling alive continuously rather than only reacting to hand pose.
+  drawAmbientGlow(sceneCtx, originX, originY - baseLength * 0.55, baseLength * 0.55, state.growth, now);
+
+  drawPlant(sceneCtx, tree, state.growth, state.bloom, originX, originY, baseLength, now);
+
+  particles.update(
+    dt,
+    originX,
+    originY - baseLength * 0.6,
+    baseLength * 0.3,
+    baseLength * 0.18,
+    state.bloom * Math.min(1, state.growth * 3),
+    PARTICLE_PALETTE
+  );
+  particles.draw(sceneCtx);
 
   if (hands.Left) {
     const pos = pinchGapPosition(hands.Left, w, h);
