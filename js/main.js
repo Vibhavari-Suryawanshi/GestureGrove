@@ -94,3 +94,4 @@ function loop(now) {
     drawGauge(sceneCtx, pos.x, pos.y, state.bloom, "Bloom", BLOOM_COLOR);
   }
 }
+
