@@ -21,7 +21,11 @@ function resizeScene() {
 window.addEventListener("resize", resizeScene);
 resizeScene();
 
-const tree = generateTree(7);
+// `tree` is reassigned (not const) so it can be regenerated with a fresh
+// random shape each time growth cycles back up from fully closed.
+let tree = generateTree(Date.now());
+let wasIdle = true;
+
 const state = createGrowthState();
 const smoothLeft = createSmoother();
 const smoothRight = createSmoother();
@@ -60,7 +64,7 @@ function drawVideoBackground() {
   sceneCtx.drawImage(video, -sceneCanvas.width, 0, sceneCanvas.width, sceneCanvas.height);
   sceneCtx.restore();
 
-  // Slight dark overlay so the glowing plant pops against the feed.
+  // Slight dark overlay so the glowing flowers pop against the feed.
   sceneCtx.fillStyle = "rgba(0, 0, 0, 0.25)";
   sceneCtx.fillRect(0, 0, sceneCanvas.width, sceneCanvas.height);
 }
@@ -77,6 +81,15 @@ function loop(now) {
   const rightSpread = hands.Right ? smoothRight(spreadValue(hands.Right)) : null;
   updateState(state, leftSpread, rightSpread);
 
+  // Once the plant has closed all the way down, the next time it starts
+  // growing again it gets a brand new random shape.
+  if (state.growth < 0.03) {
+    wasIdle = true;
+  } else if (wasIdle && state.growth > 0.06) {
+    tree = generateTree(Date.now() + Math.floor(Math.random() * 100000));
+    wasIdle = false;
+  }
+
   drawVideoBackground();
 
   const w = sceneCanvas.width;
@@ -84,7 +97,7 @@ function loop(now) {
 
   // Plant is rooted bottom-center and sized relative to the viewport so it
   // fills the screen the same way on any device.
-  const baseLength = Math.min(w, h) * 0.62;
+  const baseLength = Math.min(w, h) * 0.72;
   drawPlant(sceneCtx, tree, state.growth, state.bloom, w * 0.5, h * 0.98, baseLength);
 
   if (hands.Left) {
