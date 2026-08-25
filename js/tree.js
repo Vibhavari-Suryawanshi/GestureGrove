@@ -55,9 +55,9 @@ function partition(n, k, rng) {
 // starts dividing, rather than shrinking immediately.
 function segmentLengthFactor(numLeaves, depth, rng) {
   if (depth === 0) return 1.0 + (rng() - 0.5) * 0.2; // trunk
-  if (numLeaves >= 5) return 1.0 + rng() * 0.45; // major limb, reaches far
-  if (numLeaves >= 2) return 0.72 + rng() * 0.3; // mid branch
-  return 0.42 + rng() * 0.24; // short final stem into the flower
+  if (numLeaves >= 5) return 1.2 + rng() * 0.6; // major limb, reaches far out toward the edges
+  if (numLeaves >= 2) return 0.8 + rng() * 0.34; // mid branch
+  return 0.48 + rng() * 0.26; // short final stem into the flower
 }
 
 // Recursively splits a "budget" of flowers across branches. A node with
@@ -83,10 +83,12 @@ function buildNode(numLeaves, depth, rng) {
   const parts = partition(numLeaves, k, rng);
 
   // Wider, and wider still the closer a branch is to becoming individual
-  // flower tips — this is what keeps flowers from bunching up together
-  // near the ends of the plant.
+  // flower tips, AND wider near the root — this is what fans the plant out
+  // across the whole frame instead of bunching everything into a tight
+  // bouquet above the trunk.
   const spreadBoost = numLeaves <= 2 ? 34 : numLeaves <= 4 ? 20 : numLeaves <= 7 ? 8 : 0;
-  const baseSpread = 36 + rng() * 24 + spreadBoost;
+  const depthBoost = depth <= 1 ? 34 : depth === 2 ? 16 : 0;
+  const baseSpread = 40 + rng() * 28 + spreadBoost + depthBoost;
 
   // Give each branch angular room proportional to how many flowers it's
   // carrying (by sqrt, so it's not too extreme) rather than splitting the
