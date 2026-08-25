@@ -1,5 +1,5 @@
-// Seeded PRNG so the plant's branch shape is stable across a session instead
-// of re-randomizing every frame (which would make it flicker as it grows).
+// Seeded PRNG so the plant's shape is stable across a session instead of
+// re-randomizing every frame (which would make it flicker as it grows).
 function mulberry32(seed) {
   return function () {
     seed |= 0;
@@ -10,56 +10,77 @@ function mulberry32(seed) {
   };
 }
 
-const MAX_DEPTH = 6;
+// A fixed, capped number of individual stems fanning out from one root —
+// keeps the flower count predictable (never more than this) instead of a
+// branching tree that multiplies out of control as it grows.
+const NUM_STEMS = 7;
+const SEGMENTS_PER_STEM = 4;
 
-// Builds the branch structure once, up front. Each node only stores its
-// angle relative to its parent and its full-grown length — actual screen
-// position is computed at draw time via canvas transforms, anchored to a
-// fixed point on screen (the whole plant is one piece that lives in one
-// place, rather than jumping around with your hand).
-export function generateTree(seed = 1) {
+// Builds the stem layout once, up front: each stem is a short chain of
+// segments with slight angle jitter for a gentle natural curve, fanned out
+// across a wide spread so stems spread apart and don't overlap each other.
+export function generateStems(seed = 1) {
   const rng = mulberry32(seed);
+  const stems = [];
 
-  function build(depth, length) {
-    const node = { depth, length, children: [] };
+  for (let i = 0; i < NUM_STEMS; i++) {
+    const t = NUM_STEMS === 1 ? 0.5 : i / (NUM_STEMS - 1);
+    const baseAngle = -58 + t * 116 + (rng() - 0.5) * 8; // fan spread, degrees from straight up
+    const lengthFactor = 0.78 + rng() * 0.34; // vary stem length so tips don't line up
 
-    if (depth < MAX_DEPTH - 1) {
-      const count = depth === 0 ? 4 : rng() < 0.7 ? 2 : 3;
-      const baseSpread = 18 + rng() * 14; // degrees between siblings
-
-      for (let i = 0; i < count; i++) {
-        const angleOffset = (i - (count - 1) / 2) * baseSpread + (rng() - 0.5) * 10;
-        node.children.push({
-          angleOffset,
-          node: build(depth + 1, length * (0.7 + rng() * 0.1)),
-        });
-      }
+    const segments = [];
+    for (let s = 0; s < SEGMENTS_PER_STEM; s++) {
+      segments.push({ angleOffset: s === 0 ? baseAngle : (rng() - 0.5) * 12 });
     }
 
-    return node;
+    stems.push({ segments, lengthFactor });
   }
 
-  return build(0, 70);
+  return stems;
 }
 
-// How "unlocked" a given depth level is, given the current growth value.
-// Levels unlock sequentially: level 0 grows first, then level 1, etc.
-function levelProgress(depth, growth) {
-  return Math.min(1, Math.max(0, growth * MAX_DEPTH - depth));
+// Walks a stem's segment chain and returns the polyline points for however
+// much of it is currently revealed by `growth`, plus the tip position/angle
+// (in local space, relative to the stem's root) so a bud can be placed there.
+function computeStemPoints(stem, totalLength, growth) {
+  const revealed = totalLength * Math.max(0, Math.min(1, growth));
+  const segLength = totalLength / SEGMENTS_PER_STEM;
+
+  let x = 0;
+  let y = 0;
+  let dirAngleDeg = 0;
+  let remaining = revealed;
+  const points = [{ x, y }];
+
+  for (let s = 0; s < SEGMENTS_PER_STEM; s++) {
+    dirAngleDeg += stem.segments[s].angleOffset;
+    const rad = (dirAngleDeg * Math.PI) / 180;
+    const dx = Math.sin(rad);
+    const dy = -Math.cos(rad); // 0deg = straight up
+
+    const thisSegLen = Math.max(0, Math.min(segLength, remaining));
+    x += dx * thisSegLen;
+    y += dy * thisSegLen;
+    points.push({ x, y });
+    remaining -= thisSegLen;
+    if (remaining <= 0) break;
+  }
+
+  return { points, tip: { x, y }, tipAngleDeg: dirAngleDeg, revealed };
 }
 
-// Draws a flower bud right at a branch tip. At bloom = 0 it's a thin closed
-// spike; as bloom increases it widens and fans open into a full flower —
-// always visible once the branch has grown there, just closed vs open.
+// Draws a flower bud at the current stem's origin (0,0 in local space,
+// already translated/rotated to the tip). At bloom = 0 it's a thin closed
+// spike; as bloom increases it widens and fans open into a full flower.
 function drawBud(ctx, bloom) {
   const petalAngles = [-0.5, -0.24, 0, 0.24, 0.5];
   const spread = bloom; // 0 = petals collapsed together, 1 = fully fanned
-  const length = 22 + bloom * 14;
-  const width = 3 + bloom * 11;
+  const length = 40 + bloom * 42;
+  const width = 6 + bloom * 24;
 
   ctx.save();
   ctx.shadowColor = "rgba(255, 90, 70, 0.85)";
-  ctx.shadowBlur = 6 + bloom * 10;
+  ctx.shadowBlur = 10 + bloom * 18;
 
   for (const a of petalAngles) {
     ctx.save();
@@ -80,52 +101,35 @@ function drawBud(ctx, bloom) {
   ctx.restore();
 }
 
-function drawPlantNode(ctx, node, growth, bloom) {
-  const progress = levelProgress(node.depth, growth);
-  if (progress <= 0) return;
+// Draws the whole plant — a fixed number of stems, each with a bud at its
+// tip — rooted at (originX, originY). `baseLength` should scale with the
+// canvas size so the plant fills the screen on any device.
+export function drawPlant(ctx, stems, growth, bloom, originX, originY, baseLength) {
+  for (const stem of stems) {
+    const totalLength = baseLength * stem.lengthFactor;
+    const { points, tip, tipAngleDeg, revealed } = computeStemPoints(stem, totalLength, growth);
+    if (revealed <= 0) continue;
 
-  const len = node.length * Math.min(1, progress);
+    ctx.save();
+    ctx.translate(originX, originY);
 
-  ctx.save();
-  ctx.shadowColor = "#4d94ff";
-  ctx.shadowBlur = 6;
-  ctx.strokeStyle = "#4d94ff";
-  ctx.lineWidth = Math.max(1, 2.5 - node.depth * 0.3);
-  ctx.lineCap = "round";
-  ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.lineTo(0, -len);
-  ctx.stroke();
-  ctx.restore();
+    ctx.shadowColor = "#4d94ff";
+    ctx.shadowBlur = 8;
+    ctx.strokeStyle = "#4d94ff";
+    ctx.lineWidth = 4;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+    ctx.stroke();
 
-  ctx.translate(0, -len);
-
-  const isFullyGrown = progress >= 1;
-  const isTip = node.children.length === 0;
-
-  // A bud sits at the current growing edge of the plant: either a true
-  // leaf tip, or a branch that hasn't finished growing (and so hasn't
-  // unlocked its children yet). This keeps flowers appearing right where
-  // the plant is actively growing, as one connected piece.
-  if (isTip || !isFullyGrown) {
-    drawBud(ctx, bloom);
-  }
-
-  if (isFullyGrown) {
-    for (const child of node.children) {
-      ctx.save();
-      ctx.rotate((child.angleOffset * Math.PI) / 180);
-      drawPlantNode(ctx, child.node, growth, bloom);
-      ctx.restore();
+    if (revealed > totalLength * 0.05) {
+      ctx.translate(tip.x, tip.y);
+      ctx.rotate((tipAngleDeg * Math.PI) / 180);
+      drawBud(ctx, bloom);
     }
-  }
-}
 
-// Draws the whole plant — branches and flower buds together as one piece —
-// rooted at a fixed (originX, originY) and growing upward.
-export function drawPlant(ctx, tree, growth, bloom, originX, originY) {
-  ctx.save();
-  ctx.translate(originX, originY);
-  drawPlantNode(ctx, tree, growth, bloom);
-  ctx.restore();
+    ctx.restore();
+  }
 }
