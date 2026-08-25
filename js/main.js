@@ -106,9 +106,12 @@ function loop(now) {
   // (not just height) so on wide landscape frames the branches have enough
   // reach to fan all the way out toward the left/right edges instead of
   // staying bunched in a bubble above the trunk.
-  const baseLength = Math.max(w, h) * 0.62;
+  const baseLength = Math.max(w, h) * 0.58;
   const originX = w * 0.5;
-  const originY = h * 0.98;
+  // Pushed a bit below the bottom edge (instead of sitting right on it) so
+  // the canopy has more headroom and stays inside the frame instead of
+  // getting clipped off the top on tall/wide-spread growth.
+  const originY = h * 1.14;
 
   // Soft breathing glow behind the canopy, and drifting pollen once the
   // flowers are open — both purely time-driven, so they keep the scene
