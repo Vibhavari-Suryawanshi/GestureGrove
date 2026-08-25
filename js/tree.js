@@ -69,6 +69,10 @@ function buildNode(numLeaves, depth, rng) {
     depth,
     children: [],
     lengthFactor: segmentLengthFactor(numLeaves, depth, rng),
+    // Unique per-node phase so wind sway and flower shimmer animate out of
+    // sync with each other — otherwise the whole plant would move as one
+    // rigid piece instead of feeling alive.
+    phase: rng() * Math.PI * 2,
   };
 
   if (numLeaves <= 1) {
@@ -77,10 +81,24 @@ function buildNode(numLeaves, depth, rng) {
 
   const k = numLeaves >= 3 && rng() < 0.28 ? 3 : 2;
   const parts = partition(numLeaves, k, rng);
-  const baseSpread = 26 + rng() * 16;
 
+  // Wider, and wider still the closer a branch is to becoming individual
+  // flower tips — this is what keeps flowers from bunching up together
+  // near the ends of the plant.
+  const spreadBoost = numLeaves <= 2 ? 34 : numLeaves <= 4 ? 20 : numLeaves <= 7 ? 8 : 0;
+  const baseSpread = 36 + rng() * 24 + spreadBoost;
+
+  // Give each branch angular room proportional to how many flowers it's
+  // carrying (by sqrt, so it's not too extreme) rather than splitting the
+  // angle evenly — a branch feeding 5 flowers needs more spread than one
+  // feeding 1, or their flowers end up crowding each other.
+  const weights = parts.map((p) => Math.sqrt(p));
+  const weightSum = weights.reduce((a, b) => a + b, 0);
+  let cursor = 0;
   for (let i = 0; i < k; i++) {
-    const angleOffset = (i - (k - 1) / 2) * baseSpread + (rng() - 0.5) * 16;
+    const center = (cursor + weights[i] / 2) / weightSum - 0.5; // -0.5..0.5
+    cursor += weights[i];
+    const angleOffset = center * baseSpread * k + (rng() - 0.5) * 14;
     node.children.push({ angleOffset, node: buildNode(parts[i], depth + 1, rng) });
   }
 
@@ -119,7 +137,12 @@ export function generateTree(seed = 1) {
 
   // depth 0 is a plain, unbranched trunk — branching only starts at depth 1.
   const trunkChild = buildNode(TOTAL_FLOWERS, 1, rng);
-  const root = { depth: 0, children: [{ angleOffset: 0, node: trunkChild }], lengthFactor: 1 };
+  const root = {
+    depth: 0,
+    children: [{ angleOffset: 0, node: trunkChild }],
+    lengthFactor: 1,
+    phase: rng() * Math.PI * 2,
+  };
 
   const leaves = [];
   collectLeaves(root, leaves);
@@ -217,13 +240,21 @@ function drawSepals(ctx, bloom, size) {
 // Draws a flower bud in its own color and size. At bloom = 0 it's a thin
 // closed spike; as bloom increases it widens and fans open into a full
 // flower, with a sepal base and a small center disc for extra depth.
-function drawBud(ctx, bloom, color, sizeScale) {
+// `time` + `phase` drive a small continuous twinkle/breathing motion so
+// bloomed flowers stay lively even when hands are holding still.
+function drawBud(ctx, bloom, color, sizeScale, time = 0, phase = 0) {
   const petalAngles = [-0.55, -0.26, 0, 0.26, 0.55];
   const spread = bloom;
   const length = (54 + bloom * 66) * sizeScale;
   const width = (9 + bloom * 30) * sizeScale;
 
+  // Gentle continuous breathing scale + glow twinkle, only noticeable once
+  // the flower has actually opened up a bit.
+  const pulse = 1 + Math.sin(time * 0.0026 + phase * 1.7) * 0.045 * bloom;
+  const shimmer = 0.85 + Math.sin(time * 0.0032 + phase) * 0.15;
+
   ctx.save();
+  ctx.scale(pulse, pulse);
   ctx.shadowColor = "rgba(0, 0, 0, 0.45)";
   ctx.shadowBlur = 14;
   ctx.shadowOffsetY = 6;
@@ -231,7 +262,7 @@ function drawBud(ctx, bloom, color, sizeScale) {
   drawSepals(ctx, bloom, length);
 
   ctx.shadowColor = color;
-  ctx.shadowBlur = 10 + bloom * 18;
+  ctx.shadowBlur = (10 + bloom * 18) * shimmer;
   ctx.shadowOffsetY = 0;
 
   for (const a of petalAngles) {
@@ -263,9 +294,17 @@ function drawBud(ctx, bloom, color, sizeScale) {
   ctx.restore();
 }
 
-function drawNode(ctx, node, growth, bloom, maxDepth, segmentUnit) {
+function drawNode(ctx, node, growth, bloom, maxDepth, segmentUnit, time) {
   const progress = levelProgress(node.depth, growth, maxDepth);
   if (progress <= 0) return;
+
+  // Continuous wind sway: a slow sine offset, unique per branch via its
+  // phase, growing stronger further out toward the tips. Runs all the time
+  // off `time`, independent of hand tracking, so the plant never sits
+  // perfectly still once it's grown in.
+  const swayDeg = (1.1 + node.depth * 1.35) * Math.min(1, progress);
+  const sway = Math.sin(time * 0.0011 + (node.phase || 0)) * swayDeg;
+  ctx.rotate((sway * Math.PI) / 180);
 
   const fullLen = segmentUnit * node.lengthFactor;
   const len = fullLen * Math.min(1, progress);
@@ -278,14 +317,14 @@ function drawNode(ctx, node, growth, bloom, maxDepth, segmentUnit) {
 
   const isTip = node.children.length === 0;
   if (isTip && progress > 0.15) {
-    drawBud(ctx, bloom, node.color || "#ff3b2f", node.sizeScale || 1);
+    drawBud(ctx, bloom, node.color || "#ff3b2f", node.sizeScale || 1, time, node.phase || 0);
   }
 
   if (progress >= 1) {
     for (const child of node.children) {
       ctx.save();
       ctx.rotate((child.angleOffset * Math.PI) / 180);
-      drawNode(ctx, child.node, growth, bloom, maxDepth, segmentUnit);
+      drawNode(ctx, child.node, growth, bloom, maxDepth, segmentUnit, time);
       ctx.restore();
     }
   }
@@ -293,13 +332,17 @@ function drawNode(ctx, node, growth, bloom, maxDepth, segmentUnit) {
 
 // Draws the whole plant, rooted at (originX, originY). `baseLength` should
 // scale with the canvas size so the plant fills the screen on any device.
-export function drawPlant(ctx, tree, growth, bloom, originX, originY, baseLength) {
+// `time` (e.g. the rAF timestamp) drives the continuous idle animation —
+// wind sway on the branches and a slow twinkle/breathing pulse on open
+// flowers — so the plant keeps feeling alive even while growth/bloom hold
+// still between gestures.
+export function drawPlant(ctx, tree, growth, bloom, originX, originY, baseLength, time = 0) {
   // segmentUnit picked so a typical trunk + a couple of major limbs roughly
   // reach baseLength — exact reach varies since branch length is randomized.
   const segmentUnit = baseLength / (tree.maxDepth + 1.4);
 
   ctx.save();
   ctx.translate(originX, originY);
-  drawNode(ctx, tree.root, growth, bloom, tree.maxDepth, segmentUnit);
+  drawNode(ctx, tree.root, growth, bloom, tree.maxDepth, segmentUnit, time);
   ctx.restore();
 }
