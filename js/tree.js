@@ -10,77 +10,138 @@ function mulberry32(seed) {
   };
 }
 
-// A fixed, capped number of individual stems fanning out from one root —
-// keeps the flower count predictable (never more than this) instead of a
-// branching tree that multiplies out of control as it grows.
-const NUM_STEMS = 7;
-const SEGMENTS_PER_STEM = 4;
+const TOTAL_FLOWERS = 12;
+const LENGTH_DECAY = 0.76; // each branch level is a bit shorter than its parent
 
-// Builds the stem layout once, up front: each stem is a short chain of
-// segments with slight angle jitter for a gentle natural curve, fanned out
-// across a wide spread so stems spread apart and don't overlap each other.
-export function generateStems(seed = 1) {
-  const rng = mulberry32(seed);
-  const stems = [];
+const PALETTE = [
+  "#ff3b2f", "#ff9f1c", "#ffd23f", "#8ac926",
+  "#3a86ff", "#8338ec", "#ff006e", "#fb5607",
+  "#06d6a0", "#ef476f", "#118ab2", "#f15bb5",
+];
 
-  for (let i = 0; i < NUM_STEMS; i++) {
-    const t = NUM_STEMS === 1 ? 0.5 : i / (NUM_STEMS - 1);
-    const baseAngle = -58 + t * 116 + (rng() - 0.5) * 8; // fan spread, degrees from straight up
-    const lengthFactor = 0.78 + rng() * 0.34; // vary stem length so tips don't line up
+// Splits `n` into `k` positive parts that are uneven (not just n/k each) —
+// this is what makes the branching feel natural instead of symmetric.
+function partition(n, k, rng) {
+  if (k <= 1) return [n];
 
-    const segments = [];
-    for (let s = 0; s < SEGMENTS_PER_STEM; s++) {
-      segments.push({ angleOffset: s === 0 ? baseAngle : (rng() - 0.5) * 12 });
+  const weights = Array.from({ length: k }, () => 0.7 + rng() * 0.6);
+  const weightSum = weights.reduce((a, b) => a + b, 0);
+  const parts = weights.map((w) => Math.max(1, Math.floor((w / weightSum) * n)));
+
+  let diff = n - parts.reduce((a, b) => a + b, 0);
+  let i = 0;
+  while (diff > 0) {
+    parts[i % k]++;
+    diff--;
+    i++;
+  }
+  while (diff < 0) {
+    const idx = i % k;
+    if (parts[idx] > 1) {
+      parts[idx]--;
+      diff++;
     }
-
-    stems.push({ segments, lengthFactor });
+    i++;
   }
-
-  return stems;
+  return parts;
 }
 
-// Walks a stem's segment chain and returns the polyline points for however
-// much of it is currently revealed by `growth`, plus the tip position/angle
-// (in local space, relative to the stem's root) so a bud can be placed there.
-function computeStemPoints(stem, totalLength, growth) {
-  const revealed = totalLength * Math.max(0, Math.min(1, growth));
-  const segLength = totalLength / SEGMENTS_PER_STEM;
+// Recursively splits a "budget" of flowers across branches. A node with
+// numLeaves === 1 becomes a flower tip. Otherwise it splits into 2 (mostly)
+// or occasionally 3 unevenly-sized branches, each recursing with its own
+// share of the remaining flower budget.
+function buildNode(numLeaves, depth, rng) {
+  const node = { depth, children: [] };
 
-  let x = 0;
-  let y = 0;
-  let dirAngleDeg = 0;
-  let remaining = revealed;
-  const points = [{ x, y }];
-
-  for (let s = 0; s < SEGMENTS_PER_STEM; s++) {
-    dirAngleDeg += stem.segments[s].angleOffset;
-    const rad = (dirAngleDeg * Math.PI) / 180;
-    const dx = Math.sin(rad);
-    const dy = -Math.cos(rad); // 0deg = straight up
-
-    const thisSegLen = Math.max(0, Math.min(segLength, remaining));
-    x += dx * thisSegLen;
-    y += dy * thisSegLen;
-    points.push({ x, y });
-    remaining -= thisSegLen;
-    if (remaining <= 0) break;
+  if (numLeaves <= 1) {
+    return node; // leaf — a flower will be drawn here, color assigned later
   }
 
-  return { points, tip: { x, y }, tipAngleDeg: dirAngleDeg, revealed };
+  const k = numLeaves >= 3 && rng() < 0.28 ? 3 : 2;
+  const parts = partition(numLeaves, k, rng);
+  const baseSpread = 26 + rng() * 16;
+
+  for (let i = 0; i < k; i++) {
+    const angleOffset = (i - (k - 1) / 2) * baseSpread + (rng() - 0.5) * 16;
+    node.children.push({ angleOffset, node: buildNode(parts[i], depth + 1, rng) });
+  }
+
+  return node;
 }
 
-// Draws a flower bud at the current stem's origin (0,0 in local space,
-// already translated/rotated to the tip). At bloom = 0 it's a thin closed
+function collectLeaves(node, out) {
+  if (node.children.length === 0) {
+    out.push(node);
+  } else {
+    for (const c of node.children) collectLeaves(c.node, out);
+  }
+}
+
+function maxDepthOf(node) {
+  if (node.children.length === 0) return node.depth;
+  return Math.max(...node.children.map((c) => maxDepthOf(c.node)));
+}
+
+// Fisher-Yates using the seeded RNG so color assignment is stable per seed.
+function shuffle(arr, rng) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// Builds the whole plant once: a single trunk (depth 0) that, once grown,
+// splits unevenly into branches, which split again, until exactly
+// TOTAL_FLOWERS flower tips exist — each assigned its own color.
+export function generateTree(seed = 1) {
+  const rng = mulberry32(seed);
+
+  // depth 0 is a plain, unbranched trunk — branching only starts at depth 1.
+  const trunkChild = buildNode(TOTAL_FLOWERS, 1, rng);
+  const root = { depth: 0, children: [{ angleOffset: 0, node: trunkChild }] };
+
+  const leaves = [];
+  collectLeaves(root, leaves);
+  const colors = shuffle(PALETTE, rng);
+  leaves.forEach((leaf, i) => {
+    leaf.color = colors[i % colors.length];
+  });
+
+  return { root, maxDepth: maxDepthOf(root) };
+}
+
+function hexToRgb(hex) {
+  const h = hex.replace("#", "");
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+
+function lighten(hex, amount) {
+  const [r, g, b] = hexToRgb(hex);
+  const nr = Math.round(r + (255 - r) * amount);
+  const ng = Math.round(g + (255 - g) * amount);
+  const nb = Math.round(b + (255 - b) * amount);
+  return `rgb(${nr}, ${ng}, ${nb})`;
+}
+
+// How "unlocked" a given depth level is, given the current growth value.
+// Levels unlock sequentially: the trunk grows first, then each branch level.
+function levelProgress(depth, growth, maxDepth) {
+  return Math.min(1, Math.max(0, growth * (maxDepth + 1) - depth));
+}
+
+// Draws a flower bud in its own color. At bloom = 0 it's a thin closed
 // spike; as bloom increases it widens and fans open into a full flower.
-function drawBud(ctx, bloom) {
+function drawBud(ctx, bloom, color) {
   const petalAngles = [-0.5, -0.24, 0, 0.24, 0.5];
-  const spread = bloom; // 0 = petals collapsed together, 1 = fully fanned
-  const length = 40 + bloom * 42;
-  const width = 6 + bloom * 24;
+  const spread = bloom;
+  const length = 34 + bloom * 36;
+  const width = 5 + bloom * 20;
 
   ctx.save();
-  ctx.shadowColor = "rgba(255, 90, 70, 0.85)";
-  ctx.shadowBlur = 10 + bloom * 18;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 8 + bloom * 16;
 
   for (const a of petalAngles) {
     ctx.save();
@@ -91,8 +152,8 @@ function drawBud(ctx, bloom) {
     ctx.quadraticCurveTo(-width, -length * 0.55, 0, 0);
     ctx.closePath();
     const grad = ctx.createLinearGradient(0, 0, 0, -length);
-    grad.addColorStop(0, "#ff3b2f");
-    grad.addColorStop(1, "#ffb199");
+    grad.addColorStop(0, color);
+    grad.addColorStop(1, lighten(color, 0.55));
     ctx.fillStyle = grad;
     ctx.fill();
     ctx.restore();
@@ -101,35 +162,52 @@ function drawBud(ctx, bloom) {
   ctx.restore();
 }
 
-// Draws the whole plant — a fixed number of stems, each with a bud at its
-// tip — rooted at (originX, originY). `baseLength` should scale with the
-// canvas size so the plant fills the screen on any device.
-export function drawPlant(ctx, stems, growth, bloom, originX, originY, baseLength) {
-  for (const stem of stems) {
-    const totalLength = baseLength * stem.lengthFactor;
-    const { points, tip, tipAngleDeg, revealed } = computeStemPoints(stem, totalLength, growth);
-    if (revealed <= 0) continue;
+function drawNode(ctx, node, growth, bloom, maxDepth, segmentBase) {
+  const progress = levelProgress(node.depth, growth, maxDepth);
+  if (progress <= 0) return;
 
-    ctx.save();
-    ctx.translate(originX, originY);
+  const fullLen = segmentBase * Math.pow(LENGTH_DECAY, node.depth);
+  const len = fullLen * Math.min(1, progress);
 
-    ctx.shadowColor = "#4d94ff";
-    ctx.shadowBlur = 8;
-    ctx.strokeStyle = "#4d94ff";
-    ctx.lineWidth = 4;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
-    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
-    ctx.stroke();
+  ctx.save();
+  ctx.shadowColor = "#4d94ff";
+  ctx.shadowBlur = 7;
+  ctx.strokeStyle = "#4d94ff";
+  ctx.lineWidth = Math.max(1.5, 4 - node.depth * 0.35);
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(0, -len);
+  ctx.stroke();
+  ctx.restore();
 
-    if (revealed > totalLength * 0.05) {
-      ctx.translate(tip.x, tip.y);
-      ctx.rotate((tipAngleDeg * Math.PI) / 180);
-      drawBud(ctx, bloom);
-    }
+  ctx.translate(0, -len);
 
-    ctx.restore();
+  const isTip = node.children.length === 0;
+  if (isTip && progress > 0.15) {
+    drawBud(ctx, bloom, node.color || "#ff3b2f");
   }
+
+  if (progress >= 1) {
+    for (const child of node.children) {
+      ctx.save();
+      ctx.rotate((child.angleOffset * Math.PI) / 180);
+      drawNode(ctx, child.node, growth, bloom, maxDepth, segmentBase);
+      ctx.restore();
+    }
+  }
+}
+
+// Draws the whole plant, rooted at (originX, originY). `baseLength` should
+// scale with the canvas size so the plant fills the screen on any device.
+export function drawPlant(ctx, tree, growth, bloom, originX, originY, baseLength) {
+  // segmentBase is picked so the full chain of decaying segments down to
+  // maxDepth roughly sums to baseLength.
+  const decaySum = (1 - Math.pow(LENGTH_DECAY, tree.maxDepth + 1)) / (1 - LENGTH_DECAY);
+  const segmentBase = baseLength / decaySum;
+
+  ctx.save();
+  ctx.translate(originX, originY);
+  drawNode(ctx, tree.root, growth, bloom, tree.maxDepth, segmentBase);
+  ctx.restore();
 }
